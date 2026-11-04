@@ -1,0 +1,16 @@
+# 비밀 정보: 테스트 계정, 로그인 토큰이 들어 있다 (BAN-001). 예시 파일(.env.example)만 올린다
+.env
+.env.*
+.env *
+!.env.example
+backend/.auth/
+
+# 실행 결과(로컬 DB, 스크린샷)
+backend/data/
+
+# 실행 환경
+backend/.venv/
+__pycache__/
+.pytest_cache/
+frontend/node_modules/
+frontend/dist/

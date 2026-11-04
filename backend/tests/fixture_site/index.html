@@ -1,0 +1,224 @@
+<!doctype html>
+<!--
+  테스트 전용 가짜 FixLog 화면. 실제 FixLog 번들에서 확인한 화면 문구·aria-label·placeholder·
+  요소 구조(role=button 행, aside 패널, role=dialog)만 흉내 낸다. 실제 서비스에 요청하지 않고
+  자동화 단계·실패 기록·스크린샷 동작을 검증하는 데 쓴다.
+-->
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>FixLog</title>
+  <style>
+    body { font-family: sans-serif; margin: 0; display: flex; }
+    nav { width: 180px; padding: 12px; border-right: 1px solid #ddd; min-height: 100vh; }
+    nav a { display: block; padding: 4px 0; }
+    main { flex: 1; padding: 16px; display: flex; gap: 16px; }
+    .row { display: grid; grid-template-columns: 1fr 80px 80px 40px; padding: 8px; border-bottom: 1px solid #eee; cursor: pointer; }
+    aside { width: 320px; border-left: 1px solid #ddd; padding: 12px; }
+    [role=dialog] { position: fixed; top: 30%; left: 30%; background: #fff; border: 1px solid #333; padding: 16px; }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+const DOCS = [
+  { id: "doc-1", title: "결제 오류 처리 가이드", body: "결제 실패 시 재시도와 환불 절차를 설명합니다." },
+  { id: "doc-2", title: "릴리스 체크리스트", body: "배포 전 확인 항목입니다." },
+];
+// 새로 만든 문서는 새로고침 후에도 남도록 브라우저 컨텍스트의 localStorage에 둔다(서버 저장 흉내).
+const CREATED_KEY = "fixture_created_docs";
+const createdDocs = () => JSON.parse(localStorage.getItem(CREATED_KEY) || "[]");
+const saveCreatedDocs = (docs) => localStorage.setItem(CREATED_KEY, JSON.stringify(docs));
+const allDocs = () => [...createdDocs().filter(d => !d.trashed), ...DOCS];
+function createDocument() {
+  const doc = { id: "new-" + Date.now(), title: "제목 없음", body: "" };
+  saveCreatedDocs([doc, ...createdDocs()]);
+  go("/documents/" + doc.id);
+}
+function saveDocument(id, title, body) {
+  saveCreatedDocs(createdDocs().map(d => d.id === id ? { ...d, title, body } : d));
+}
+function trashDocument(id) {
+  saveCreatedDocs(createdDocs().map(d => d.id === id ? { ...d, trashed: true } : d));
+  go("/documents");
+}
+function toast(text) {
+  const node = el("div", { role: "status" }, text);
+  document.body.append(node);
+  setTimeout(() => node.remove(), 3000);
+}
+const LOADING = "불러오는 중…";
+const root = document.getElementById("root");
+
+function go(path) { history.pushState({}, "", path); render(); }
+window.addEventListener("popstate", render);
+
+function el(tag, attrs = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k.startsWith("on")) node.addEventListener(k.slice(2), v);
+    else if (k === "value") node.value = v;
+    else node.setAttribute(k, v);
+  }
+  for (const c of children) node.append(c);
+  return node;
+}
+
+function shell(...content) {
+  const link = (label, path) => el("a", { href: path, onclick: (e) => { e.preventDefault(); go(path); } }, label);
+  const nav = el("nav", {}, link("홈", "/workspace"), link("AI 검색", "/search"), link("문서", "/documents"),
+    link("휴지통", "/trash"),
+    link(DOCS[0].title, "/documents/" + DOCS[0].id));
+  root.replaceChildren(nav, el("main", {}, ...content));
+}
+
+function render() {
+  const path = location.pathname.replace(/\/$/, "") || "/";
+  if (path === "/") { root.replaceChildren(el("h1", {}, "FixLog"), el("p", {}, "Your knowledge workspace")); return; }
+  if (path === "/login") {
+    root.replaceChildren(el("button", { onclick: () => {} }, "Continue with Google"));
+    return;
+  }
+  if (!localStorage.getItem("access_token")) { history.replaceState({}, "", "/login"); render(); return; }
+  if (path === "/workspace") return renderWorkspace();
+  if (path === "/documents") return renderList();
+  if (path.startsWith("/documents/")) return renderEditor(path.split("/")[2]);
+  if (path.startsWith("/search")) return renderSearch();
+  if (path === "/trash") return renderTrash();
+}
+
+function renderWorkspace() {
+  const input = el("input", { placeholder: "FixLog에게 필요한 문서를 찾아달라고 해보세요..." });
+  const form = el("form", { onsubmit: (e) => { e.preventDefault(); go("/search?q=" + encodeURIComponent(input.value)); } },
+    input, el("button", { type: "submit", "aria-label": "검색" }, "→"));
+  const recent = el("div", {}, LOADING);
+  const header = el("header", {}, el("h1", {}, "홈"), el("button", { onclick: createDocument }, "새 문서"));
+  const quickCard = el("div", { role: "button", tabindex: "0", onclick: createDocument }, el("span", {}, "새 문서"));
+  shell(el("div", {}, header, el("h1", {}, "무엇을 찾고 계신가요?"), form, quickCard, el("h2", {}, "최근 문서"), recent));
+  setTimeout(() => recent.replaceChildren(...DOCS.map(d => el("p", {}, d.title))), 200);
+}
+
+// FixLog처럼 화면을 옮겨도 검색어를 기억하고, 검색어별 결과를 메모리에 보관한다(새로고침하면 비워짐).
+// 같은 검색어를 다시 검색하면 서버에 묻지 않고 보관한 옛 결과를 보여 준다.
+let lastQuery = "";
+const resultCache = new Map();
+function renderList() {
+  const input = el("input", { placeholder: "제목으로 검색...", value: lastQuery });
+  const list = el("div", {});
+  const show = (q) => {
+    lastQuery = q;
+    if (!resultCache.has(q)) resultCache.set(q, allDocs().filter(d => d.title.includes(q)));
+    paint(q, resultCache.get(q));
+  };
+  const paint = (q, docs) => {
+    if (q && docs.length === 0) { list.replaceChildren(el("p", {}, "검색 결과가 없습니다.")); return; }
+    const folderRows = q ? [] : [el("div", { role: "button", class: "row", tabindex: "0" }, el("span", {}, "공유 폴더"), el("span", {}, "폴더"), el("span", {}, "tester"))];
+    const docRows = docs.map(d => el("div", { role: "button", class: "row", tabindex: "0", onclick: () => go("/documents/" + d.id) },
+      el("span", {}, el("span", {}, d.title)), el("span", {}, "문서"), el("span", {}, "tester"),
+      el("button", { "aria-label": "더보기", onclick: (e) => e.stopPropagation() }, "⋯")));
+    list.replaceChildren(...folderRows, ...docRows);
+  };
+  let timer;
+  let typed = lastQuery;
+  input.addEventListener("input", () => {
+    if (input.value === typed) return;
+    typed = input.value;
+    clearTimeout(timer);
+    list.replaceChildren(el("p", {}, LOADING));
+    timer = setTimeout(() => show(input.value.trim()), 300);
+  });
+  shell(el("div", {}, input, el("div", {}, el("span", {}, "이름"), el("span", {}, "유형")), list));
+  if (lastQuery && resultCache.has(lastQuery)) { paint(lastQuery, resultCache.get(lastQuery)); return; }
+  list.replaceChildren(el("p", {}, LOADING));
+  setTimeout(() => show(""), 200);
+}
+
+function renderEditor(id) {
+  const doc = allDocs().find(d => d.id === id);
+  const area = el("div", { style: "flex:1" }, el("p", {}, "문서를 불러오는 중…"));
+  shell(area);
+  setTimeout(() => {
+    if (!doc) { area.replaceChildren(el("p", {}, "문서를 불러오지 못했습니다.")); return; }
+    const main = root.querySelector("main");
+    const banner = el("div", {});
+    const body = el("div", { class: "bn-editor", contenteditable: "true" });
+    body.textContent = doc.body;
+    const titleInput = el("input", { "aria-label": "문서 제목", value: doc.title });
+    let aiPanel = null, historyPanel = null;
+
+    const openAi = () => {
+      aiPanel?.remove();
+      const content = el("div", {}, el("span", {}, "요약하는 중…"));
+      aiPanel = el("aside", {}, el("span", {}, "문서 AI"),
+        el("button", { "aria-label": "패널 닫기", onclick: () => aiPanel.remove() }, "×"),
+        el("div", {}, "요약"), content);
+      main.append(aiPanel);
+      setTimeout(() => {
+        content.replaceChildren(el("p", {}, "이 문서는 결제 실패 대응 절차를 요약합니다."));
+        setTimeout(() => {
+          const dialog = el("div", { role: "dialog" }, el("h2", {}, "AI 추천 태그"),
+            el("button", { onclick: () => dialog.remove() }, "취소"), el("button", {}, "추가 (0)"));
+          document.body.append(dialog);
+        }, 300);
+      }, 500);
+    };
+    const toggleHistory = () => {
+      if (historyPanel?.isConnected) { historyPanel.remove(); return; }
+      const preview = (n) => {
+        banner.replaceChildren(el("span", {}, `v${n} · 3분 전 버전을 보고 있어요 · 읽기 전용`),
+          el("button", {}, "이 버전으로 복원"),
+          el("button", { onclick: () => banner.replaceChildren() }, "현재 버전으로 돌아가기"));
+      };
+      historyPanel = el("aside", {}, el("span", {}, "버전 기록"),
+        el("button", { "aria-label": "패널 닫기", onclick: () => historyPanel.remove() }, "×"),
+        el("button", { "aria-current": "true" }, doc.title, el("span", {}, "현재 버전")),
+        el("ul", {}, el("li", {}, el("button", { onclick: () => preview(2) }, "v2 3분 전")),
+          el("li", {}, el("button", { onclick: () => preview(1) }, "v1 1시간 전"))));
+      main.append(historyPanel);
+    };
+    const header = el("header", {},
+      el("button", { "aria-label": "버전 기록", title: "버전 기록", onclick: toggleHistory }, "🕘"),
+      el("button", { onclick: () => {
+        saveDocument(doc.id, titleInput.value, body.innerText);
+        setTimeout(() => toast("문서를 저장했어요."), 200);
+      } }, "저장"),
+      el("button", { onclick: openAi }, "요약"),
+      el("button", { "aria-label": "문서 삭제", onclick: () => {
+        const dialog = el("div", { role: "alertdialog" }, el("h2", {}, "삭제하시겠습니까?"),
+          el("p", {}, "'" + doc.title + "' 문서를 삭제합니다."),
+          el("button", { onclick: () => dialog.remove() }, "취소"),
+          el("button", { onclick: () => { dialog.remove(); trashDocument(doc.id); } }, "삭제"));
+        document.body.append(dialog);
+      } }, "🗑"));
+    area.replaceChildren(header, banner, titleInput, body);
+  }, 200);
+}
+
+function renderTrash() {
+  const list = el("div", {}, el("p", {}, LOADING));
+  shell(el("div", {}, el("header", {}, el("h1", {}, "휴지통")), list));
+  setTimeout(() => {
+    const trashed = createdDocs().filter(d => d.trashed);
+    if (trashed.length === 0) { list.replaceChildren(el("p", {}, "휴지통이 비어 있습니다.")); return; }
+    list.replaceChildren(...trashed.map(d => el("div", {},
+      el("span", {}, el("span", {}, d.title), el("span", {}, "문서 · 삭제됨 방금")),
+      el("button", {}, "복원"), el("button", {}, "영구 삭제"))));
+  }, 200);
+}
+
+function renderSearch() {
+  const q = new URLSearchParams(location.search).get("q") || "";
+  const answer = el("div", {}, el("span", { role: "status", "aria-label": "답변 생성 중" }, "..."));
+  shell(el("div", {}, el("h1", {}, "AI 검색"), el("span", {}, q), answer));
+  // 질문에 제목이 들어 있는 문서를 근거 문서 카드(h3 제목 + "문서 열기")로 보여 준다. 없으면 첫 문서.
+  const matched = allDocs().filter(d => q.includes(d.title));
+  const refs = (matched.length ? matched : allDocs().slice(0, 1)).map(d => el("div", {},
+    el("h3", {}, d.title), el("span", {}, "87% match"),
+    el("button", { onclick: () => go("/documents/" + d.id) }, "문서 열기")));
+  setTimeout(() => answer.replaceChildren(el("p", {}, "관련 문서를 찾았습니다."), ...refs), 500);
+}
+
+render();
+</script>
+</body>
+</html>
