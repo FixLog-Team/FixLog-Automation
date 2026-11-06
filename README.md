@@ -75,9 +75,22 @@ python -m app.cli auth
 3. Google이 2단계 인증, 계정 선택, "안전하지 않은 브라우저" 같은 확인을 띄우면 **열린 창에서 직접 완료**하세요. 기본 대기 시간은 300초이며 `--wait 600`으로 늘릴 수 있습니다.
 4. FixLog 워크스페이스가 열리면 로그인 상태가 `backend/.auth/state.json`에 저장되고 창이 닫힙니다.
 
-- 로그인 상태가 만료되면 시나리오의 "로그인" 단계가 "로그인 상태가 만료되었습니다"로 실패합니다. 그때 `auth`를 다시 실행하세요.
+- 로그인 상태가 만료되면 시나리오의 "로그인" 단계가 "로그인 상태가 만료되었습니다"로 실패합니다. 그때 `auth`(또는 아래 `auth-import`)를 다시 실행하세요.
 - `backend/.auth/state.json`에는 로그인 토큰이 들어 있습니다. 공유하거나 커밋하지 마세요.
 - Google이 자동화 브라우저 로그인 자체를 막으면 `.env`에 `BROWSER_TYPE=firefox`로 바꾸고 `python -m playwright install firefox` 후 다시 시도해 보세요.
+
+### Google이 "브라우저 또는 앱이 안전하지 않을 수 있습니다"로 막을 때
+
+자동화 브라우저에서는 로그인할 수 없으니, 평소 쓰는 Chrome에서 직접 로그인한 뒤 FixLog 토큰만 옮깁니다.
+
+```bash
+python -m app.cli auth-import
+```
+
+1. 평소 쓰는 Chrome에서 FixLog에 직접 로그인해 워크스페이스 화면을 엽니다.
+2. F12 → Console 탭에 명령이 안내하는 `copy(...)` 문장을 붙여 넣고 Enter를 누르면 토큰이 클립보드에 복사됩니다.
+3. 터미널의 "토큰 JSON:" 입력란에 붙여 넣고 Enter를 누릅니다. 입력 내용은 화면에 보이지 않습니다.
+4. `backend/.auth/state.json`이 저장됩니다. 복사한 토큰은 다른 곳에 붙여 넣거나 공유하지 마세요.
 
 ## 5. 실행
 
@@ -169,8 +182,9 @@ python -m pytest
 | `No module named 'app'` | `backend` 폴더로 이동해서 실행 |
 | `No module named 'pydantic'`(또는 playwright 등) | 가상환경을 켜지 않았음. `.venv\Scripts\activate` 후 실행 |
 | AI 요약 "AI 요약에 실패했습니다"·AI 검색 "답변 생성에 실패했습니다" | FixLog AI 쪽 오류. 기존 문서 대상 `ai` 시나리오도 실패하면 FixLog AI 장애이므로 나중에 다시 실행 |
-| 로그인 단계 "저장된 로그인 상태가 없습니다" | 4장 `python -m app.cli auth` 실행 |
-| 로그인 단계 "로그인 상태가 만료되었습니다" | `auth` 다시 실행 |
+| 로그인 단계 "저장된 로그인 상태가 없습니다" | 4장 `python -m app.cli auth` 실행 (Google이 막으면 `auth-import`) |
+| 로그인 단계 "로그인 상태가 만료되었습니다" | `auth` 또는 `auth-import` 다시 실행 |
+| `auth`에서 Google "브라우저 또는 앱이 안전하지 않을 수 있습니다" | 4장 `python -m app.cli auth-import` 사용 |
 | 문서 목록 조회 "최상위에 문서가 없습니다" | 폴더 안에만 문서가 있으면 `.env`의 `TEST_DOCUMENT_TITLE`에 문서 제목 지정 |
 | AI 요약 "문서 본문이 비어 있어" | 본문이 있는 문서를 `TEST_DOCUMENT_TITLE`로 지정 |
 | 단계가 `Timeout ... exceeded`로 실패 | 실행 상세의 스크린샷 확인. FixLog 화면 문구가 바뀌었으면 `backend/app/automation/locators.py`만 고치면 됩니다 |
