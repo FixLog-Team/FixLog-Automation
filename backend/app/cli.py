@@ -1,18 +1,20 @@
 """명령줄 진입점.
 
   python -m app.cli auth                 테스트 계정으로 1회 로그인하고 인증 상태 저장
+  python -m app.cli auth-import          일반 브라우저에서 복사한 FixLog 토큰으로 인증 상태 저장
   python -m app.cli scenarios            시나리오 목록
   python -m app.cli run --scenario basic 시나리오 실행 후 결과 출력
   python -m app.cli serve                API + 대시보드 서버 실행
 """
 import argparse
 import asyncio
+import getpass
 import logging
 import sys
 
 from pydantic import ValidationError
 
-from .automation.auth import AuthError, bootstrap_auth
+from .automation.auth import AuthError, bootstrap_auth, save_imported_auth
 from .automation.scenarios import find_scenario, list_scenarios
 from .config import (
     DEFAULT_CONCURRENCY, DEFAULT_INTERVAL_SEC, DEFAULT_RUN_COUNT, DEFAULT_RUN_TIMEOUT_SEC, DEFAULT_STEP_DELAY_MS,
@@ -47,6 +49,31 @@ def _command_auth(args: argparse.Namespace) -> int:
             runner.run(bootstrap_auth(settings, args.wait))
     except AuthError as error:
         logger.error("로그인 실패: %s", error)
+        return 1
+    return 0
+
+
+# 사람이 평소 쓰는 브라우저의 FixLog 탭 개발자 도구 콘솔에서 실행할 문장. 토큰을 클립보드로만 옮긴다.
+AUTH_IMPORT_COPY_SNIPPET = (
+    "copy(JSON.stringify({access_token: localStorage.getItem('access_token'), "
+    "refresh_token: localStorage.getItem('refresh_token'), workspace_id: localStorage.getItem('workspace_id')}))"
+)
+
+
+def _command_auth_import(_: argparse.Namespace) -> int:
+    settings = load_settings()
+    sys.stdout.write(
+        f"1. 평소 쓰는 Chrome에서 {settings.base_url} 에 직접 로그인합니다.\n"
+        "2. 워크스페이스 화면에서 F12 > Console 탭에 아래 문장을 붙여 넣고 Enter (클립보드에 복사됨):\n"
+        f"   {AUTH_IMPORT_COPY_SNIPPET}\n"
+        "3. 아래 입력란에 붙여 넣고 Enter (입력 내용은 화면에 보이지 않습니다)\n"
+    )
+    # 토큰이 터미널 화면·기록에 남지 않게 getpass로 받는다(COM-021).
+    pasted_json = getpass.getpass("토큰 JSON: ")
+    try:
+        save_imported_auth(settings, pasted_json)
+    except AuthError as error:
+        logger.error("인증 상태 저장 실패: %s", error)
         return 1
     return 0
 
@@ -121,6 +148,9 @@ def build_parser() -> argparse.ArgumentParser:
     auth = sub.add_parser("auth", help="테스트 계정 Google 로그인 후 인증 상태 저장")
     auth.add_argument("--wait", type=int, default=DEFAULT_AUTH_WAIT_SEC, help="사람이 로그인을 마칠 때까지 기다릴 초")
     auth.set_defaults(func=_command_auth)
+
+    auth_import = sub.add_parser("auth-import", help="일반 브라우저에서 복사한 FixLog 토큰으로 인증 상태 저장")
+    auth_import.set_defaults(func=_command_auth_import)
 
     scenarios = sub.add_parser("scenarios", help="시나리오 목록")
     scenarios.set_defaults(func=_command_scenarios)

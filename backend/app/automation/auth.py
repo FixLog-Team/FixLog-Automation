@@ -2,7 +2,10 @@
 
 Google 로그인 화면에 테스트 계정을 입력하는 정상 절차만 수행한다. Google이 2단계 인증·CAPTCHA·
 "안전하지 않은 브라우저" 확인을 요구하면 우회하지 않고 사람이 열린 브라우저에서 직접 완료한다.
+Google이 자동화 브라우저의 로그인 자체를 막으면, 사람이 평소 쓰는 브라우저에서 로그인한 뒤
+FixLog localStorage 토큰을 붙여 넣어 인증 상태를 만든다(build_imported_auth_state).
 """
+import json
 import logging
 
 from playwright.async_api import Error as PlaywrightError
@@ -22,6 +25,9 @@ GOOGLE_EMAIL_INPUT = "#identifierId"
 GOOGLE_EMAIL_NEXT = "#identifierNext"
 GOOGLE_PASSWORD_INPUT = "input[name='Passwd']"
 GOOGLE_PASSWORD_NEXT = "#passwordNext"
+# FixLog가 로그인 후 localStorage에 두는 키(SPEC-20261104-fixlog-browser-automation 1장). 이 키만 받는다.
+REQUIRED_TOKEN_KEY = "access_token"
+IMPORTABLE_STORAGE_KEYS = ("access_token", "refresh_token", "workspace_id")
 
 
 class AuthError(RuntimeError):
@@ -90,4 +96,40 @@ async def _login_and_save(settings: Settings, context: BrowserContext, page: Pag
 
     settings.auth_state_path.parent.mkdir(parents=True, exist_ok=True)
     await context.storage_state(path=str(settings.auth_state_path))
+    logger.info("인증 상태 저장 완료: %s", settings.auth_state_path)
+
+
+def build_imported_auth_state(base_url: str, pasted_json: str) -> dict:
+    """붙여 넣은 localStorage 값 JSON을 Playwright storage_state 형식으로 바꾼다.
+
+    오류 메시지에 입력값을 넣지 않는다(토큰 노출 방지, COM-021).
+    """
+    try:
+        pasted = json.loads(pasted_json)
+    except json.JSONDecodeError as error:
+        raise AuthError("붙여 넣은 값이 JSON 형식이 아닙니다.") from error
+    if not isinstance(pasted, dict):
+        raise AuthError("붙여 넣은 값이 JSON 객체({...})가 아닙니다.")
+    unknown_keys = sorted(set(pasted) - set(IMPORTABLE_STORAGE_KEYS))
+    if unknown_keys:
+        raise AuthError(f"받을 수 없는 키가 있습니다: {', '.join(unknown_keys)}")
+    token = pasted.get(REQUIRED_TOKEN_KEY)
+    if not isinstance(token, str) or not token.strip():
+        raise AuthError(f"{REQUIRED_TOKEN_KEY} 값이 없습니다. FixLog에 로그인한 탭에서 복사했는지 확인하세요.")
+
+    local_storage = []
+    for key in IMPORTABLE_STORAGE_KEYS:
+        value = pasted.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, str):
+            raise AuthError(f"{key} 값은 문자열이어야 합니다.")
+        local_storage.append({"name": key, "value": value})
+    return {"cookies": [], "origins": [{"origin": base_url, "localStorage": local_storage}]}
+
+
+def save_imported_auth(settings: Settings, pasted_json: str) -> None:
+    auth_state = build_imported_auth_state(settings.base_url, pasted_json)
+    settings.auth_state_path.parent.mkdir(parents=True, exist_ok=True)
+    settings.auth_state_path.write_text(json.dumps(auth_state, ensure_ascii=False), encoding="utf-8")
     logger.info("인증 상태 저장 완료: %s", settings.auth_state_path)
