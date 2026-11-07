@@ -8,7 +8,7 @@ export const DEFAULT_RUN_SETTINGS = {
   headless: "",
   run_count: 1,
   concurrency: 1,
-  step_delay_ms: 500,
+  step_delay_ms: 2000,
   interval_sec: 3,
   timeout_sec: 180,
   save_success_screenshots: false,
